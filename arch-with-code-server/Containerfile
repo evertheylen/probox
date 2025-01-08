@@ -1,0 +1,51 @@
+FROM archlinux:base-devel
+
+ENV UID=1000
+ENV GID=1000
+ENV USER=evert
+
+# TODO make ENV's also ARG's?
+# ARG foo
+# ENV foo=$foo
+# Note that ENV/VAR definitions reset after a FROM
+
+# ------------------------ Install stuff ------------------------
+
+RUN pacman -Syu --noconfirm
+
+RUN groupadd -g $GID $USER && useradd -m -u $UID -g $GID -s /bin/zsh $USER
+RUN echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+RUN systemd-machine-id-setup
+
+# Install paru from AUR
+RUN pacman -S --noconfirm git
+RUN sudo -u $USER bash -c "git clone https://aur.archlinux.org/paru.git /tmp/paru && cd /tmp/paru && makepkg -si --noconfirm" \
+    && rm -rf /tmp/paru
+
+# Install code-server (long compile)
+RUN sudo -u $USER bash -c "paru -S --noconfirm code-server"
+
+# Install more stuff
+RUN pacman -S --noconfirm less nano zsh grml-zsh-config ripgrep python nodejs npm
+
+# Clean up
+RUN pacman -Sc --noconfirm
+
+RUN npm install --global pnpm
+
+
+# ------------------------ Configs ------------------------
+
+RUN mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER
+
+CMD [ "/sbin/init" ]
+
+COPY ./setup-code-server.sh /usr/bin/setup-code-server.sh
+RUN chmod +x /usr/bin/setup-code-server.sh
+
+USER evert
+RUN echo '' > /home/evert/.zshrc
+USER root
+
+# TODO how can images using this base image be easily configured to setup-code-server with a fitting port number?
