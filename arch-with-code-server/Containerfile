@@ -48,4 +48,4 @@ USER evert
 RUN echo '' > /home/evert/.zshrc
 USER root
 
-# TODO how can images using this base image be easily configured to setup-code-server with a fitting port number?
+LABEL probox.post_create /usr/bin/setup-code-server.sh
