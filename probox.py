@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 
+import argparse, sys, os, signal, json, subprocess, random, tempfile
 from pathlib import Path
-import argparse
-import sys
-import os
-import json
 from dataclasses import dataclass, asdict
-import subprocess
-import random
-import tempfile
 
-YELLOW = '\033[1;33m'
-END = '\033[0m'
+CONFIG_PATH = Path('/var/Bestanden/Configs/home')
+START = '\033[1;33m>>>'
+END = '\033[0m\n'
 GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository'}
 
 
@@ -20,9 +15,13 @@ def capture_podman(*args):
     return json.loads(res.stdout)
 
 
+def status(*text):
+    print(START, *text, end=END, file=sys.stderr)
+
+
 def run_podman(*args, check=True, quiet=False, **kwargs):
     command = ['podman', *args]
-    print(f"{YELLOW}>>> {' '.join(command)}{END}")
+    status(' '.join(command))
     if quiet:
         kwargs['stdout'] = subprocess.DEVNULL
     return subprocess.run(command, check=check, text=True, **kwargs)
@@ -58,24 +57,56 @@ def suggest_name(path, _taken):
         i += 1
 
 
+def ssh_agent_socket(name):
+    return f'/run/user/1000/probox-{name}-ssh-agent.socket'
+
+
+def ssh_agent_pid(name):
+    processes = subprocess.run(['pgrep', '-f', f'ssh-agent -a {ssh_agent_socket(name)}'], capture_output=True, text=True)
+    pid_str = processes.stdout.strip()
+    if pid_str != '':
+        return int(pid_str)
+    else:
+        return None
+
+
+def start_ssh_agent(name):
+    pid = ssh_agent_pid(name)
+    if pid is None:
+        status("Starting ssh-agent")
+        subprocess.run(['ssh-agent', '-a', ssh_agent_socket(name)], stdout=subprocess.DEVNULL, check=True)
+
+
+def stop_ssh_agent(name):
+    pid = ssh_agent_pid(name)
+    if pid is not None:
+        os.kill(pid, signal.SIGTERM)
+    else:
+        status("No ssh-agent found")
+
+
 def create(args):
     containers_by_path, containers_by_name = get_containers()
-    path = Path(os.getcwd() if args.path is None else args.path).absolute()
-    if path in containers_by_path:
-        print("Path already registered!", containers_by_path[path]['Names'][0])
+    proj_path = Path(os.getcwd() if args.path is None else args.path).absolute()
+    if proj_path in containers_by_path:
+        status("Path already registered!", containers_by_path[proj_path]['Names'][0])
         sys.exit(1)
 
-    name = args.name or suggest_name(path, containers_by_name.keys())
+    name = args.name or suggest_name(proj_path, containers_by_name.keys())
     if name is None:
-        print("Couldn't determine a name from the path. Specify a name with --name.")
+        status("Couldn't determine a name from the path. Specify a name with --name.")
+        sys.exit(1)
+    if '.' in name or '/' in name:
+        status("Name can't contain . or /")
         sys.exit(1)
 
-    basic_create_options = ['--name', name, '--hostname', name]
+    basic_create_options = ['--name', name, '--hostname', name, '--tz=local']
 
     from_image = getattr(args, 'from') or 'arch-with-code-server'
     image_data = capture_podman('image', 'inspect', from_image)[0]
     post_create_cmd = image_data["Config"]["Labels"].get("probox.post_create")
 
+    # TODO remove, not necessary anymore?
     if post_create_cmd:
         run_podman('create', *basic_create_options, from_image, quiet=True)
         try:
@@ -88,10 +119,12 @@ def create(args):
 
             with tempfile.TemporaryDirectory() as tempdir:
                 extra_options_filename = Path(tempdir) / 'extra_podman_options.json'
-                cp_res = run_podman('cp', f'{name}:/extra_podman_options.json', str(extra_options_filename), check=False)
+                cp_res = run_podman('cp', f'{name}:/extra_podman_options.json', str(extra_options_filename), check=False, quiet=True)
                 if cp_res.returncode == 0:
                     with open(extra_options_filename) as f:
                         extra_podman_options = json.load(f)
+                else:
+                    extra_podman_options = []
         finally:
             run_podman('stop', name, quiet=True)
             run_podman('rm', name, quiet=True)
@@ -103,27 +136,43 @@ def create(args):
     # how does toolbx do it? the example given in docs specifically mentions "mounting entire home directory"
     # https://docs.podman.io/en/latest/markdown/podman-run.1.html#volume-v-source-volume-host-dir-container-dir-options
 
+    # TODO look at https://github.com/containers/podman/discussions/13728#discussioncomment-2900471
+    # In particular, this comment says something like using --userns=auto "with a huge /etc/subuid range"
+    # Already did the subuid thing via
+    #   sudo usermod --add-subuids 1000000-990000000 --add-subgids 1000000-990000000 evert
+    # But then mapping the volume is impossible (I'd use `:idmap=uids=1000-1000-1;gids=1000-1000-1`), see https://github.com/containers/crun/issues/1632
+
+    start_ssh_agent(name)
+
     run_podman(
-        'create', *basic_create_options, '--label', f'probox.project_path={path}',
+        'create', *basic_create_options, '--label', f'probox.project_path={proj_path}',
         '--userns=keep-id', '--security-opt', 'label=disable',
-        '--volume', f'{path}:{path}',
+        '--volume', f'{proj_path}:{proj_path}',
+        '--volume', f'{ssh_agent_socket(name)}:/home/evert/ssh-agent.socket',
+        # pasta: auto forward ports from container to host, but not other way around
+        # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
+        # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to run a webapp)
+        '--network=pasta:-t,auto,-u,auto,-T,none,-U,none',
         *extra_podman_options,
         from_image
     )
 
+    if not args.noconfig:
+        push_configs_to_container(name)
+
 
 def find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name):
-    if path_or_name is None or '/' in path_or_name:
+    if path_or_name is None or '/' in path_or_name or '.' in path_or_name:
         deep_path = Path(path_or_name or os.getcwd()).absolute()
         for path in [deep_path] + list(deep_path.parents):
             con = containers_by_path.get(path)
             if con is not None:
                 return con["Names"][0]
-        print("No container found for directory", deep_path, 'in', containers_by_path.keys())
+        status("No container found for directory", deep_path, 'in', containers_by_path.keys())
         sys.exit(1)
 
     if path_or_name not in containers_by_name:
-        print(f"Couldn't find name '{path_or_name}'")
+        status(f"Couldn't find name '{path_or_name}'")
         sys.exit(1)
 
     return path_or_name
@@ -137,6 +186,7 @@ def run(args):
     project_path = Path(container_data['Config']['Labels']['probox.project_path'])
 
     if not container_data['State']['Running']:
+        start_ssh_agent(container_name)
         run_podman('start', container_name, quiet=True)
 
     cwd = Path(os.getcwd()).absolute()
@@ -145,7 +195,12 @@ def run(args):
     else:
         workdir = Path('/home/evert')
 
-    run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env', 'XDG_RUNTIME_DIR=/run/user/1000', '--env', 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus', container_name, '/bin/zsh', check=False)
+    if args.cmd:
+        cmd = args.cmd
+    else:
+        cmd = ['/bin/fish', '-l']  # -l for login shell
+
+    run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), container_name, *cmd, check=False)
 
 
 def stop(args):
@@ -154,7 +209,19 @@ def stop(args):
 
     container_data = capture_podman('container', 'inspect', container_name)[0]
     if container_data['State']['Running']:
-        run_podman('stop', container_name)
+        run_podman('stop', container_name, quiet=True)
+    stop_ssh_agent(container_name)
+
+
+def ssh_add(args):
+    containers_by_path, containers_by_name = get_containers()
+    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name)
+
+    container_data = capture_podman('container', 'inspect', container_name)[0]
+    if not container_data['State']['Running']:
+        status("Container is not running, so neither is its ssh-agent.")
+    else:
+        subprocess.run(['ssh-add', *args.args], env={**os.environ, "SSH_AUTH_SOCK": ssh_agent_socket(container_name)})
 
 
 def name(args):
@@ -163,7 +230,34 @@ def name(args):
 
 
 def ls(args):
-    run_podman('ps', '--all', '--size', '--filter', 'label=probox.project_path', '--format', 'table {{.ID}} {{.Size}} {{.Status}} {{.Ports}} {{.Names}} {{.Mounts}}')
+    run_podman('ps', '--all', '--size', '--filter', 'label=probox.project_path', '--format', 'table {{.ID}} {{.Size}} {{.Status}} {{.Names}} {{.Mounts}}')
+
+
+def get_config_files():
+    return [file.relative_to(CONFIG_PATH) for file in CONFIG_PATH.rglob('*') if file.is_file()]
+
+
+rel_config_files = lambda: (f.relative_to(CONFIG_PATH) for f in CONFIG_PATH.iterdir())
+
+
+def push_configs_to_container(name, files=None):
+    for relfile in files or rel_config_files():
+        subprocess.run(["podman", "cp", CONFIG_PATH / relfile, f"{name}:{Path('/home/evert') / relfile}"], check=True)
+
+
+def pull_configs_from_container(name, files=None):
+    for relfile in files or rel_config_files():
+        subprocess.run(["podman", "cp", f"{name}:{Path('/home/evert') / relfile}", CONFIG_PATH / relfile], check=True)
+
+
+def config(args):
+    containers_by_path, containers_by_name = get_containers()
+    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name)
+    files = [Path(f) for f in args.file]
+    if args.operation == 'push':
+        push_configs_to_container(container_name, files)
+    else:
+        pull_configs_from_container(container_name, files)
 
 
 def main():
@@ -171,33 +265,40 @@ def main():
 
     subparsers = parser.add_subparsers()
 
-    # 'create' command
     create_parser = subparsers.add_parser('create', help="Create a new container (box) for your project")
     create_parser.add_argument('path', nargs='?', default=None, help="Path to attach to container (default = working dir)")
     create_parser.add_argument('--name', help="Set the name for the container")
     create_parser.add_argument('--from', help="Container image to base this one upon")
+    create_parser.add_argument('--noconfig', action="store_true", help="Disable initial config push")
     create_parser.set_defaults(func=create)
 
-    # 'run' command
     run_parser = subparsers.add_parser('run', help="Run an existing container (start and exec)")
     run_parser.add_argument('path_or_name', nargs='?', default=None, help="Path or name of container (default = working dir)")
+    run_parser.add_argument('cmd', nargs=argparse.REMAINDER, help="Command to run")
     run_parser.set_defaults(func=run)
 
-    # 'stop' command
     stop_parser = subparsers.add_parser('stop', help="Stop a container")
     stop_parser.add_argument('path_or_name', nargs='?', default=None, help="Path or name of container (default = working dir)")
     stop_parser.set_defaults(func=stop)
 
-    # 'name' command
+    ssh_add_parser = subparsers.add_parser('ssh-add', help="Add key to ssh-agent for project (tip: use -c to confirm usage in host)")
+    ssh_add_parser.add_argument('path_or_name', help="Path or name of container")
+    ssh_add_parser.add_argument('args', nargs=argparse.REMAINDER, help="Arguments passed to ssh-add")
+    ssh_add_parser.set_defaults(func=ssh_add)
+
     name_parser = subparsers.add_parser('name', help="Get name of container attached to directory")
     name_parser.add_argument('path_or_name', nargs='?', default=None, help="Path or name of container (default = working dir)")
     name_parser.set_defaults(func=name)
 
-    # 'ls' command
     ls_parser = subparsers.add_parser('ls', help="List all probox containers")
     ls_parser.set_defaults(func=ls)
 
-    # Parse and run the appropriate function, or show help
+    config_parser = subparsers.add_parser('config', help="Manage configuration files")
+    config_parser.add_argument("operation", choices=["push", "pull"])
+    config_parser.add_argument('path_or_name', nargs='?', help="Path or name of container (default = working dir)")
+    config_parser.add_argument('file', nargs='*', help="File to push or pull")
+    config_parser.set_defaults(func=config)
+
     args = parser.parse_args()
     if not any(vars(args).values()):
         parser.print_help()

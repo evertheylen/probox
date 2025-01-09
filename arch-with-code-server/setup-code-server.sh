@@ -15,7 +15,7 @@ while true; do
         break
     elif [[ "$response" =~ ^n|N ]]; then
         echo "No code-server."
-        echo "[]" > /extra_podman_options.json
+        #echo "[]" > /extra_podman_options.json
         exit
     else
         echo "Invalid port number. Please enter a number between 1 and 65535."
@@ -36,4 +36,5 @@ EOL
 
 chown evert:evert /home/evert/.config/code-server/config.yaml
 
-echo "[\"--publish\", \"$port:$port\"]" > /extra_podman_options.json
+# Not needed anymore, as pasta automatically detects ports
+#echo "[\"--publish\", \"127.0.0.1:$port:$port\"]" > /extra_podman_options.json

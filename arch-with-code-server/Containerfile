@@ -2,7 +2,8 @@ FROM archlinux:base-devel
 
 ENV UID=1000
 ENV GID=1000
-ENV USER=evert
+ARG USER=evert
+ENV USER=$USER
 
 # TODO make ENV's also ARG's?
 # ARG foo
@@ -13,29 +14,50 @@ ENV USER=evert
 
 RUN pacman -Syu --noconfirm
 
-RUN groupadd -g $GID $USER && useradd -m -u $UID -g $GID -s /bin/zsh $USER
+RUN groupadd -g $GID $USER && useradd -m -u $UID -g $GID -s /bin/fish $USER
 RUN echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 RUN systemd-machine-id-setup
 
-# Install paru from AUR
+# Install paru from AUR (takes a relatively long time to compile)
 RUN pacman -S --noconfirm git
 RUN sudo -u $USER bash -c "git clone https://aur.archlinux.org/paru.git /tmp/paru && cd /tmp/paru && makepkg -si --noconfirm" \
     && rm -rf /tmp/paru
 
-# Install code-server (long compile)
+# Install code-server (takes a bit of time to compile)
 RUN sudo -u $USER bash -c "paru -S --noconfirm code-server"
 
-# Install more stuff
-RUN pacman -S --noconfirm less nano zsh grml-zsh-config ripgrep python nodejs npm
+# System mgmt
+RUN pacman -S --noconfirm pkgfile
+# Terminal stuff
+RUN pacman -S --noconfirm less nano fish ripgrep tree htop bat fzf tmux tree jq
+# Programming
+RUN pacman -S --noconfirm python python-pexpect python-poetry jedi-language-server python-jedi nodejs npm podman go jupyterlab clang rust-analyzer gopls shellcheck
+# Debugging
+RUN pacman -S --noconfirm strace valgrind gdb
+# Network
+RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump
 
 # Clean up
 RUN pacman -Sc --noconfirm
 
 RUN npm install --global pnpm
 
+USER $USER
+RUN code-server --install-extension ms-python.python
+RUN code-server --install-extension llvm-vs-code-extensions.vscode-clangd
+RUN code-server --install-extension rust-lang.rust-analyzer
+RUN code-server --install-extension eamodio.gitlens
+RUN code-server --install-extension alefragnani.bookmarks
+RUN code-server --install-extension ms-toolsai.jupyter
+RUN code-server --install-extension golang.go
+RUN code-server --install-extension timonwong.shellcheck
+USER root
+
 
 # ------------------------ Configs ------------------------
+
+RUN pkgfile --update
 
 RUN mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER
 
@@ -44,8 +66,15 @@ CMD [ "/sbin/init" ]
 COPY ./setup-code-server.sh /usr/bin/setup-code-server.sh
 RUN chmod +x /usr/bin/setup-code-server.sh
 
-USER evert
-RUN echo '' > /home/evert/.zshrc
+USER $USER
+
+RUN mkdir -p ~/.config/fish/
+RUN cat <<EOF > ~/.config/fish/config.fish
+set -x XDG_RUNTIME_DIR /run/user/$UID
+set -x DBUS_SESSION_BUS_ADDRESS unix:path=/run/user/$UID/bus
+set -x SSH_AUTH_SOCK /home/$USER/ssh-agent.socket
+EOF
+
 USER root
 
 LABEL probox.post_create /usr/bin/setup-code-server.sh
