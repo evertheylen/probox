@@ -52,6 +52,7 @@ RUN code-server --install-extension alefragnani.bookmarks
 RUN code-server --install-extension ms-toolsai.jupyter
 RUN code-server --install-extension golang.go
 RUN code-server --install-extension timonwong.shellcheck
+RUN code-server --install-extension github.github-vscode-theme
 USER root
 
 
