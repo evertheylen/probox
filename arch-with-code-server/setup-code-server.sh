@@ -29,6 +29,7 @@ sudo -u evert bash -c "XDG_RUNTIME_DIR=/run/user/$ID DBUS_SESSION_BUS_ADDRESS=un
 mkdir -p /home/evert/.config/code-server
 
 cat >/home/evert/.config/code-server/config.yaml <<EOL
+app-name: "📦/$CONTAINER_NAME - Code"
 bind-addr: 0.0.0.0:$port
 auth: none
 cert: false

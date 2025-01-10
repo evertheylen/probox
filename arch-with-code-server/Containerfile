@@ -36,7 +36,7 @@ RUN pacman -S --noconfirm python python-pexpect python-poetry jedi-language-serv
 # Debugging
 RUN pacman -S --noconfirm strace valgrind gdb
 # Network
-RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump
+RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump socat
 
 # Clean up
 RUN pacman -Sc --noconfirm
@@ -58,6 +58,8 @@ USER root
 # ------------------------ Configs ------------------------
 
 RUN pkgfile --update
+
+RUN echo 'include /usr/share/nano/*.nanorc' >> /etc/nanorc
 
 RUN mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER
 

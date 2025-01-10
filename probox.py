@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse, sys, os, signal, json, subprocess, random, tempfile
+import argparse, sys, os, signal, json, subprocess, tempfile
 from pathlib import Path
 from dataclasses import dataclass, asdict
 
@@ -111,7 +111,7 @@ def create(args):
         run_podman('create', *basic_create_options, from_image, quiet=True)
         try:
             run_podman('start', name, quiet=True)
-            run_podman('exec', '-it', name, post_create_cmd, check=True)
+            run_podman('exec', '-it', '--env', f'CONTAINER_NAME={name}', name, post_create_cmd, check=True)
             # Why all this work? See https://github.com/containers/podman/issues/18309
             res = run_podman('commit', name, '--pause=true', capture_output=True)
             # Next command will recreate it
@@ -237,17 +237,20 @@ def get_config_files():
     return [file.relative_to(CONFIG_PATH) for file in CONFIG_PATH.rglob('*') if file.is_file()]
 
 
-rel_config_files = lambda: (f.relative_to(CONFIG_PATH) for f in CONFIG_PATH.iterdir())
-
-
 def push_configs_to_container(name, files=None):
-    for relfile in files or rel_config_files():
-        subprocess.run(["podman", "cp", CONFIG_PATH / relfile, f"{name}:{Path('/home/evert') / relfile}"], check=True)
+    # TODO: container needs to be running ... also it's three commands per file???
+    for relfile in files or get_config_files():
+        container_file = Path('/home/evert') / relfile
+        subprocess.run(["podman", "exec", "--user", "evert", name, "mkdir", "-p", str(container_file.parent)], check=True)
+        subprocess.run(["podman", "cp", CONFIG_PATH / relfile, f"{name}:{container_file}"], check=True)
+        subprocess.run(["podman", "exec", name, "chown", "evert:evert", str(container_file)], check=True)
 
 
 def pull_configs_from_container(name, files=None):
-    for relfile in files or rel_config_files():
-        subprocess.run(["podman", "cp", f"{name}:{Path('/home/evert') / relfile}", CONFIG_PATH / relfile], check=True)
+    for relfile in files or get_config_files():
+        host_file = CONFIG_PATH / relfile
+        host_file.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["podman", "cp", f"{name}:{Path('/home/evert') / relfile}", str(host_file)], check=True)
 
 
 def config(args):
