@@ -106,7 +106,6 @@ def create(args):
     image_data = capture_podman('image', 'inspect', from_image)[0]
     post_create_cmd = image_data["Config"]["Labels"].get("probox.post_create")
 
-    # TODO remove, not necessary anymore?
     if post_create_cmd:
         run_podman('create', *basic_create_options, from_image, quiet=True)
         try:
@@ -158,6 +157,7 @@ def create(args):
     )
 
     if not args.noconfig:
+        run_podman('start', name, quiet=True)
         push_configs_to_container(name)
 
 
