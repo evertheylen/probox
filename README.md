@@ -13,15 +13,17 @@
 - Manage config files between your containers with `probox config push/pull`
 - Limit SSH keys access using `probox ssh-add`
 - The necessary ports and paths are forwarded in a transparent way, without compromising security
+- No dependencies (other than python, podman and ssh-agent)
+- Just a thin layer over `podman`
 
 
 ## TODO's
 
-- [ ] Remove hardcoded `evert` usernames, `1000` UID/GIDs, hardcoded `fish` shell
+- [ ] Remove hardcoded `evert` usernames, `1000` UID/GIDs, hardcoded `fish` shell, config dir
 - [ ] Provide more base images, allow configuring default image
 - [ ] Read up on `--userns=keep-id` and `--security-opt label=disable`. Both are needed right now for easy operation but I don't fully understand the security implications.
 - [ ] Improve speed of config push/pull, and make it work when container is stopped
-- [ ] Make localhost in container reachable on host (now only bindings on 0.0.0.0 are forwarded)
+- [ ] Make localhost in container reachable on host (now only bindings on 0.0.0.0 are forwarded -- may require a firewall on the host)
 
 Nice to haves:
 - [ ] Make config handling use a git repo, with branches per project?

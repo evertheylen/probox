@@ -29,14 +29,16 @@ RUN sudo -u $USER bash -c "paru -S --noconfirm code-server"
 
 # System mgmt
 RUN pacman -S --noconfirm pkgfile
+# Podman (in podman)
+RUN pacman -S --noconfirm podman fuse-overlayfs
 # Terminal stuff
 RUN pacman -S --noconfirm less nano fish ripgrep tree htop bat fzf tmux tree jq
 # Programming
-RUN pacman -S --noconfirm python python-pexpect python-poetry jedi-language-server python-jedi nodejs npm podman go jupyterlab clang rust-analyzer gopls shellcheck
+RUN pacman -S --noconfirm python python-pexpect python-pillow python-poetry jedi-language-server python-jedi nodejs npm go jupyterlab clang rust-analyzer gopls shellcheck
 # Debugging
 RUN pacman -S --noconfirm strace valgrind gdb
 # Network
-RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump socat
+RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump socat net-tools
 
 # Clean up
 RUN pacman -Sc --noconfirm
@@ -66,6 +68,27 @@ RUN mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER
 
 CMD [ "/sbin/init" ]
 
+# Make Arch PINP work
+RUN cat <<EOF > /etc/containers/storage.conf
+[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+
+[storage.options]
+mount_program = "/usr/bin/fuse-overlayfs"
+additionalimagestores = []
+
+[storage.options.pull_options]
+
+[storage.options.overlay]
+mountopt = "nodev"
+EOF
+
+# Also for PINP rootless
+RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newuidmap
+RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newgidmap
+
 COPY ./setup-code-server.sh /usr/bin/setup-code-server.sh
 RUN chmod +x /usr/bin/setup-code-server.sh
 
@@ -76,6 +99,8 @@ RUN cat <<EOF > ~/.config/fish/config.fish
 set -x XDG_RUNTIME_DIR /run/user/$UID
 set -x DBUS_SESSION_BUS_ADDRESS unix:path=/run/user/$UID/bus
 set -x SSH_AUTH_SOCK /home/$USER/ssh-agent.socket
+set -x GIT_EDITOR nano
+set -x EDITOR nano
 EOF
 
 USER root

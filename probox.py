@@ -7,7 +7,7 @@ from dataclasses import dataclass, asdict
 CONFIG_PATH = Path('/var/Bestanden/Configs/home')
 START = '\033[1;33m>>>'
 END = '\033[0m\n'
-GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository'}
+GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository', 'code'}
 
 
 def capture_podman(*args):
@@ -110,7 +110,7 @@ def create(args):
         run_podman('create', *basic_create_options, from_image, quiet=True)
         try:
             run_podman('start', name, quiet=True)
-            run_podman('exec', '-it', '--env', f'CONTAINER_NAME={name}', name, post_create_cmd, check=True)
+            run_podman('exec', '-it', name, post_create_cmd, check=True)
             # Why all this work? See https://github.com/containers/podman/issues/18309
             res = run_podman('commit', name, '--pause=true', capture_output=True)
             # Next command will recreate it
@@ -146,6 +146,7 @@ def create(args):
     run_podman(
         'create', *basic_create_options, '--label', f'probox.project_path={proj_path}',
         '--userns=keep-id', '--security-opt', 'label=disable',
+        *(['--privileged'] if args.privileged else []),
         '--volume', f'{proj_path}:{proj_path}',
         '--volume', f'{ssh_agent_socket(name)}:/home/evert/ssh-agent.socket',
         # pasta: auto forward ports from container to host, but not other way around
@@ -200,7 +201,7 @@ def run(args):
     else:
         cmd = ['/bin/fish', '-l']  # -l for login shell
 
-    run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), container_name, *cmd, check=False)
+    run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env', 'SSH_AUTH_SOCK=/home/evert/ssh-agent.sock', container_name, *cmd, check=False)
 
 
 def stop(args):
@@ -273,6 +274,7 @@ def main():
     create_parser.add_argument('--name', help="Set the name for the container")
     create_parser.add_argument('--from', help="Container image to base this one upon")
     create_parser.add_argument('--noconfig', action="store_true", help="Disable initial config push")
+    create_parser.add_argument('--privileged', action="store_true", help="Make container privileged (way less secure, but makes nested podman possible)")
     create_parser.set_defaults(func=create)
 
     run_parser = subparsers.add_parser('run', help="Run an existing container (start and exec)")
