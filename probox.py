@@ -201,7 +201,19 @@ def run(args):
     else:
         cmd = ['/bin/fish', '-l']  # -l for login shell
 
-    run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env', 'SSH_AUTH_SOCK=/home/evert/ssh-agent.sock', container_name, *cmd, check=False)
+    env = {
+        'SSH_AUTH_SOCK': '/home/evert/ssh-agent.socket',
+        # Assume linger in systemd
+        'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus',
+        'XDG_RUNTIME_DIR': '/run/user/1000',
+        'PWD': workdir,
+    }
+
+    with tempfile.NamedTemporaryFile(mode='w+') as f:
+        for k, v in env.items():
+            f.write(f"{k}={v}\n")
+        f.flush()
+        run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env-file', f.name, container_name, *cmd, check=False)
 
 
 def stop(args):
