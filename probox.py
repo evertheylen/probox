@@ -10,8 +10,8 @@ END = '\033[0m\n'
 GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository', 'code'}
 
 
-def capture_podman(*args):
-    res = subprocess.run(['podman', *args, '--format', 'json'], capture_output=True, text=True, check=True)
+def capture_podman(*args, format_json=True):
+    res = subprocess.run(['podman', *args, *(['--format', 'json'] if format_json else [])], capture_output=True, text=True, check=True)
     return json.loads(res.stdout)
 
 
@@ -146,6 +146,7 @@ def create(args):
     run_podman(
         'create', *basic_create_options, '--label', f'probox.project_path={proj_path}',
         '--userns=keep-id', '--security-opt', 'label=disable',
+        '--pids-limit=-1',
         *(['--privileged'] if args.privileged else []),
         '--volume', f'{proj_path}:{proj_path}',
         '--volume', f'{ssh_agent_socket(name)}:/home/evert/ssh-agent.socket',
@@ -276,6 +277,40 @@ def config(args):
         pull_configs_from_container(container_name, files)
 
 
+ports_code = '''
+import json, psutil
+print(json.dumps([
+    {"ip": p.laddr.ip, "port": p.laddr.port, "type": p.type, "cmd": (psutil.Process(p.pid).cmdline() if p.pid is not None else None)}
+    for p in psutil.net_connections() if p.status == 'LISTEN'
+]))
+'''
+
+
+detect_services = {
+    ('/usr/lib/code-server/lib/node', '/usr/lib/code-server/out/node/entry'): ('code-server', 'http'),
+}
+
+
+def ports(args):
+    # Podman doesn't track the auto-forwarded ports pasta handles, so we look for them ourselves
+    running_containers = capture_podman('ps', '--filter', 'label=probox.project_path')
+    for c in running_containers:
+        name = c['Names'][0]
+        # TODO: understand why we need --privileged exactly? Sometimes the PID is None (even though running equivalent code
+        # in a shell *does* give the PID)
+        open_ports = capture_podman('exec', '--privileged', name, 'python3', '-c', ports_code, format_json=False)
+        print(f"- {c['Names'][0]}")
+        for p in open_ports:
+            service = detect_services.get(tuple(p['cmd']))
+            if service is not None:
+                name, proto = service
+            else:
+                # Guess...
+                name = Path(c['cmd'][0]).name
+                proto = 'http' if p['type'] == 1 else 'udp'  # not all TCP is HTTP, but most?
+            print(f"   - {proto}://127.0.0.1:{p['port']}/  ({name})")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="probox", description="Manage containers for your development projects (with podman).")
 
@@ -315,6 +350,9 @@ def main():
     config_parser.add_argument('path_or_name', nargs='?', help="Path or name of container (default = working dir)")
     config_parser.add_argument('file', nargs='*', help="File to push or pull")
     config_parser.set_defaults(func=config)
+
+    ports_parser = subparsers.add_parser('ports', help="List all exposed ports")
+    ports_parser.set_defaults(func=ports)
 
     args = parser.parse_args()
     if not any(vars(args).values()):
