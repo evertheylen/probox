@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import argparse, sys, os, signal, json, subprocess, tempfile
+import argparse, sys, os, signal, json, subprocess, tempfile, socket
 from pathlib import Path
 from dataclasses import dataclass, asdict
 
@@ -307,7 +307,7 @@ def ports(args):
             else:
                 # Guess...
                 name = Path(c['cmd'][0]).name
-                proto = 'http' if p['type'] == 1 else 'udp'  # not all TCP is HTTP, but most?
+                proto = 'http' if p['type'] == socket.SOCK_STREAM else ''  # not all TCP is HTTP, but most?
             print(f"   - {proto}://127.0.0.1:{p['port']}/  ({name})")
 
 
