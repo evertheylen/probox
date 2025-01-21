@@ -10,6 +10,12 @@ END = '\033[0m\n'
 GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository', 'code'}
 
 
+# TODO: handle errors automatically:
+#   Failed to create control group inotify object: Too many open files
+#   Failed to allocate manager object: Too many open files
+# Solution -> `sudo sysctl fs.inotify.max_user_instances=8192`
+
+
 def capture_podman(*args, format_json=True):
     res = subprocess.run(['podman', *args, *(['--format', 'json'] if format_json else [])], capture_output=True, text=True, check=True)
     return json.loads(res.stdout)
@@ -305,8 +311,7 @@ def ports(args):
             if service is not None:
                 name, proto = service
             else:
-                # Guess...
-                name = Path(c['cmd'][0]).name
+                name = Path(p['cmd'][0]).name
                 proto = 'http' if p['type'] == socket.SOCK_STREAM else ''  # not all TCP is HTTP, but most?
             print(f"   - {proto}://127.0.0.1:{p['port']}/  ({name})")
 
