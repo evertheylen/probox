@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 
-import argparse, sys, os, signal, json, subprocess, tempfile, socket
+import argparse, sys, os, signal, json, subprocess, tempfile, socket, random, getpass
 from pathlib import Path
 from dataclasses import dataclass, asdict
+
 
 CONFIG_PATH = Path('/var/Bestanden/Configs/home')
 START = '\033[1;33m>>>'
 END = '\033[0m\n'
 GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository', 'code'}
+DEFAULT_IMAGE='arch-with-code-server'
 
 
 # TODO: handle errors automatically:
@@ -91,14 +93,14 @@ def stop_ssh_agent(name):
         status("No ssh-agent found")
 
 
-def create(args):
+def create(*, path=None, name=None, from_image=None, privileged=False, push_config=True, ignore_post_create_cmd=False, ignore_existing_containers=False):
     containers_by_path, containers_by_name = get_containers()
-    proj_path = Path(os.getcwd() if args.path is None else args.path).absolute()
-    if proj_path in containers_by_path:
+    proj_path = Path(os.getcwd() if path is None else path).absolute()
+    if not ignore_existing_containers and proj_path in containers_by_path:
         status("Path already registered!", containers_by_path[proj_path]['Names'][0])
         sys.exit(1)
 
-    name = args.name or suggest_name(proj_path, containers_by_name.keys())
+    name = name or suggest_name(proj_path, containers_by_name.keys())
     if name is None:
         status("Couldn't determine a name from the path. Specify a name with --name.")
         sys.exit(1)
@@ -108,11 +110,13 @@ def create(args):
 
     basic_create_options = ['--name', name, '--hostname', name, '--tz=local']
 
-    from_image = getattr(args, 'from') or 'arch-with-code-server'
+    if from_image is None:
+        from_image = DEFAULT_IMAGE
+
     image_data = capture_podman('image', 'inspect', from_image)[0]
     post_create_cmd = image_data["Config"]["Labels"].get("probox.post_create")
 
-    if post_create_cmd:
+    if not ignore_post_create_cmd and post_create_cmd:
         run_podman('create', *basic_create_options, from_image, quiet=True)
         try:
             run_podman('start', name, quiet=True)
@@ -121,21 +125,9 @@ def create(args):
             res = run_podman('commit', name, '--pause=true', capture_output=True)
             # Next command will recreate it
             from_image = res.stdout.strip()
-
-            with tempfile.TemporaryDirectory() as tempdir:
-                extra_options_filename = Path(tempdir) / 'extra_podman_options.json'
-                cp_res = run_podman('cp', f'{name}:/extra_podman_options.json', str(extra_options_filename), check=False, quiet=True)
-                if cp_res.returncode == 0:
-                    with open(extra_options_filename) as f:
-                        extra_podman_options = json.load(f)
-                else:
-                    extra_podman_options = []
         finally:
             run_podman('stop', name, quiet=True)
             run_podman('rm', name, quiet=True)
-
-    else:
-        extra_podman_options = []
 
     # TODO get rid of --security-opt label=disable ???
     # how does toolbx do it? the example given in docs specifically mentions "mounting entire home directory"
@@ -153,18 +145,19 @@ def create(args):
         'create', *basic_create_options, '--label', f'probox.project_path={proj_path}',
         '--userns=keep-id', '--security-opt', 'label=disable',
         '--pids-limit=-1',
-        *(['--privileged'] if args.privileged else []),
+        '--cap-add=NET_RAW',  # For pings
+        '--device=/dev/fuse',  # For rootless PINP, see https://www.redhat.com/en/blog/podman-inside-container
+        *(['--privileged'] if privileged else []),
         '--volume', f'{proj_path}:{proj_path}',
         '--volume', f'{ssh_agent_socket(name)}:/home/evert/ssh-agent.socket',
         # pasta: auto forward ports from container to host, but not other way around
         # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
         # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to run a webapp)
         '--network=pasta:-t,auto,-u,auto,-T,none,-U,none',
-        *extra_podman_options,
         from_image
     )
 
-    if not args.noconfig:
+    if push_config:
         run_podman('start', name, quiet=True)
         push_configs_to_container(name)
 
@@ -186,9 +179,9 @@ def find_container_name_by_path_or_name(containers_by_path, containers_by_name, 
     return path_or_name
 
 
-def run(args):
+def run(*, path_or_name, cmd=None):
     containers_by_path, containers_by_name = get_containers()
-    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name)
+    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name)
 
     container_data = capture_podman('container', 'inspect', container_name)[0]
     project_path = Path(container_data['Config']['Labels']['probox.project_path'])
@@ -203,10 +196,8 @@ def run(args):
     else:
         workdir = Path('/home/evert')
 
-    if args.cmd:
-        cmd = args.cmd
-    else:
-        cmd = ['/bin/fish', '-l']  # -l for login shell
+    if cmd is None:
+        cmd = container_data['Config']['Labels'].get('probox.shell', '/bin/bash').split(' ')
 
     env = {
         'SSH_AUTH_SOCK': '/home/evert/ssh-agent.socket',
@@ -223,9 +214,21 @@ def run(args):
         run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env-file', f.name, container_name, *cmd, check=False)
 
 
-def stop(args):
+def temp(path=None, from_image=None, privileged=False, push_config=True):
+    random_id = ''.join(random.choice('0123456789ABCDEF') for i in range(6))
+    name = f'probox-temp-{random_id}'
+    create(
+        path=path, name=name, from_image=from_image, privileged=privileged,
+        push_config=push_config, ignore_post_create_cmd=True, ignore_existing_containers=True
+    )
+    run(path_or_name=name)
+    stop(path_or_name=name)
+    run_podman('rm', name, quiet=True)
+
+
+def stop(path_or_name):
     containers_by_path, containers_by_name = get_containers()
-    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name)
+    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name)
 
     container_data = capture_podman('container', 'inspect', container_name)[0]
     if container_data['State']['Running']:
@@ -233,23 +236,23 @@ def stop(args):
     stop_ssh_agent(container_name)
 
 
-def ssh_add(args):
+def ssh_add(path_or_name, args):
     containers_by_path, containers_by_name = get_containers()
-    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name)
+    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name)
 
     container_data = capture_podman('container', 'inspect', container_name)[0]
     if not container_data['State']['Running']:
         status("Container is not running, so neither is its ssh-agent.")
     else:
-        subprocess.run(['ssh-add', *args.args], env={**os.environ, "SSH_AUTH_SOCK": ssh_agent_socket(container_name)})
+        subprocess.run(['ssh-add', *args], env={**os.environ, "SSH_AUTH_SOCK": ssh_agent_socket(container_name)})
 
 
-def name(args):
+def name(path_or_name):
     containers_by_path, containers_by_name = get_containers()
-    print(find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name))
+    print(find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name))
 
 
-def ls(args):
+def ls():
     run_podman('ps', '--all', '--size', '--filter', 'label=probox.project_path', '--format', 'table {{.ID}} {{.Size}} {{.Status}} {{.Names}} {{.Mounts}}')
 
 
@@ -273,11 +276,11 @@ def pull_configs_from_container(name, files=None):
         subprocess.run(["podman", "cp", f"{name}:{Path('/home/evert') / relfile}", str(host_file)], check=True)
 
 
-def config(args):
+def config(path_or_name, operation, files=[]):
     containers_by_path, containers_by_name = get_containers()
-    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, args.path_or_name)
-    files = [Path(f) for f in args.file]
-    if args.operation == 'push':
+    container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name)
+    files = [Path(f) for f in files]
+    if operation == 'push':
         push_configs_to_container(container_name, files)
     else:
         pull_configs_from_container(container_name, files)
@@ -297,7 +300,7 @@ detect_services = {
 }
 
 
-def ports(args):
+def ports():
     # Podman doesn't track the auto-forwarded ports pasta handles, so we look for them ourselves
     running_containers = capture_podman('ps', '--filter', 'label=probox.project_path')
     for c in running_containers:
@@ -326,38 +329,53 @@ def main():
     create_parser.add_argument('--name', help="Set the name for the container")
     create_parser.add_argument('--from', help="Container image to base this one upon")
     create_parser.add_argument('--noconfig', action="store_true", help="Disable initial config push")
-    create_parser.add_argument('--privileged', action="store_true", help="Make container privileged (way less secure, but makes nested podman possible)")
-    create_parser.set_defaults(func=create)
+    create_parser.add_argument('--privileged', action="store_true", help="Make container privileged (not secure, but makes nested podman possible)")
+    create_parser.set_defaults(func=lambda args: create(
+        path=args.path, name=args.name, from_image=getattr(args, 'from'), privileged=args.privileged, push_config=not args.noconfig
+    ))
 
     run_parser = subparsers.add_parser('run', help="Run an existing container (start and exec)")
     run_parser.add_argument('path_or_name', nargs='?', default=None, help="Path or name of container (default = working dir)")
     run_parser.add_argument('cmd', nargs=argparse.REMAINDER, help="Command to run")
-    run_parser.set_defaults(func=run)
+    run_parser.set_defaults(func=lambda args: run(
+        path_or_name=args.path_or_name, cmd=args.cmd
+    ))
+
+    temp_parser = subparsers.add_parser('temp', help="Create and run a temporary container")
+    temp_parser.add_argument('path', nargs='?', default=None, help="Path to attach to container (default = working dir)")
+    temp_parser.add_argument('--from', help="Container image to base this one upon")
+    temp_parser.add_argument('--noconfig', action="store_true", help="Disable initial config push")
+    temp_parser.add_argument('--privileged', action="store_true", help="Make container privileged (way less secure, but makes nested podman possible)")
+    temp_parser.set_defaults(func=lambda args: temp(
+        path=args.path, from_image=getattr(args, 'from'), privileged=args.privileged, push_config=not args.noconfig
+    ))
 
     stop_parser = subparsers.add_parser('stop', help="Stop a container")
     stop_parser.add_argument('path_or_name', nargs='?', default=None, help="Path or name of container (default = working dir)")
-    stop_parser.set_defaults(func=stop)
+    stop_parser.set_defaults(func=lambda args: stop(path_or_name=args.path_or_name))
 
     ssh_add_parser = subparsers.add_parser('ssh-add', help="Add key to ssh-agent for project (tip: use -c to confirm usage in host)")
     ssh_add_parser.add_argument('path_or_name', help="Path or name of container")
     ssh_add_parser.add_argument('args', nargs=argparse.REMAINDER, help="Arguments passed to ssh-add")
-    ssh_add_parser.set_defaults(func=ssh_add)
+    ssh_add_parser.set_defaults(func=lambda args: ssh_add(path_or_name=args.path_or_name, args=args.args))
 
     name_parser = subparsers.add_parser('name', help="Get name of container attached to directory")
     name_parser.add_argument('path_or_name', nargs='?', default=None, help="Path or name of container (default = working dir)")
-    name_parser.set_defaults(func=name)
+    name_parser.set_defaults(func=lambda args: name(path_or_name=args.path_or_name))
 
     ls_parser = subparsers.add_parser('ls', help="List all probox containers")
-    ls_parser.set_defaults(func=ls)
+    ls_parser.set_defaults(func=lambda args: ls())
 
     config_parser = subparsers.add_parser('config', help="Manage configuration files")
     config_parser.add_argument("operation", choices=["push", "pull"])
     config_parser.add_argument('path_or_name', nargs='?', help="Path or name of container (default = working dir)")
     config_parser.add_argument('file', nargs='*', help="File to push or pull")
-    config_parser.set_defaults(func=config)
+    config_parser.set_defaults(func=lambda args: config(
+        path_or_name=args.path_or_name, operation=args.operation, files=args.file
+    ))
 
     ports_parser = subparsers.add_parser('ports', help="List all exposed ports")
-    ports_parser.set_defaults(func=ports)
+    ports_parser.set_defaults(func=lambda args: ports())
 
     args = parser.parse_args()
     if not any(vars(args).values()):

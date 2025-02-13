@@ -1,14 +1,14 @@
 FROM archlinux:base-devel
 
-ENV UID=1000
-ENV GID=1000
+# Parts taken from https://github.com/containers/image_build/blob/main/podman/Containerfile
+
+ARG UID=1000
+ENV UID=$UID
+ARG GID=1000
+ENV GID=$GID
 ARG USER=evert
 ENV USER=$USER
 
-# TODO make ENV's also ARG's?
-# ARG foo
-# ENV foo=$foo
-# Note that ENV/VAR definitions reset after a FROM
 
 # ------------------------ Install stuff ------------------------
 
@@ -58,6 +58,13 @@ RUN code-server --install-extension github.github-vscode-theme
 USER root
 
 
+RUN mkdir -p /var/lib/shared/overlay-images /var/lib/shared/overlay-layers /var/lib/shared/vfs-images /var/lib/shared/vfs-layers && \
+  touch /var/lib/shared/overlay-images/images.lock && \
+  touch /var/lib/shared/overlay-layers/layers.lock && \
+  touch /var/lib/shared/vfs-images/images.lock && \
+  touch /var/lib/shared/vfs-layers/layers.lock
+
+
 # ------------------------ Configs ------------------------
 
 RUN pkgfile --update
@@ -68,7 +75,7 @@ RUN mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER
 
 CMD [ "/sbin/init" ]
 
-# Make Arch PINP work
+# Like quay.io/podman/stable (comments removed)
 RUN cat <<EOF > /etc/containers/storage.conf
 [storage]
 driver = "overlay"
@@ -76,37 +83,61 @@ runroot = "/run/containers/storage"
 graphroot = "/var/lib/containers/storage"
 
 [storage.options]
-mount_program = "/usr/bin/fuse-overlayfs"
-additionalimagestores = []
-
-[storage.options.pull_options]
+additionalimagestores = ["/var/lib/shared", "/usr/lib/containers/storage"]
+pull_options = {enable_partial_images = "true", use_hard_links = "false", ostree_repos=""}
 
 [storage.options.overlay]
-mountopt = "nodev"
+mount_program = "/usr/bin/fuse-overlayfs"
+mountopt = "nodev,fsync=0"
+
 EOF
 
 
+# Also like quay.io/podman/stable (comments removed)
+# TODO add this?
+# default_sysctls = [
+#   "net.ipv4.ping_group_range=0 0",
+# ]
 RUN cat <<EOF >/etc/containers/containers.conf
-# was present in containers.conf already
 [containers]
-default_sysctls = [
-  "net.ipv4.ping_group_range=0 0",
-]
+netns="host"
+userns="host"
+ipcns="host"
+utsns="host"
+cgroupns="host"
+cgroups="disabled"
+log_driver = "k8s-file"
 
-# had to modify, see https://github.com/containers/podman/issues/6368#issuecomment-633921800
 [engine]
 cgroup_manager = "cgroupfs"
+events_logger="file"
+runtime="crun"
 
 EOF
 
-# Also for PINP rootless
+# Also for rootless PINP
+RUN echo $USER:10000:5000 > /etc/subuid
+RUN echo $USER:10000:5000 > /etc/subgid
 RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newuidmap
 RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newgidmap
+
+# Make pings work
+RUN setcap cap_net_raw+p $(which ping)
 
 COPY ./setup-code-server.sh /usr/bin/setup-code-server.sh
 RUN chmod +x /usr/bin/setup-code-server.sh
 
 USER $USER
+
+# Again, for rootless PINP
+RUN mkdir -p ~/.config/containers
+RUN cat <<EOF >~/.config/containers/containers.conf
+[containers]
+volumes = [
+	"/proc:/proc",
+]
+default_sysctls = []
+EOF
 
 RUN mkdir -p ~/.config/fish/
 RUN cat <<EOF > ~/.config/fish/config.fish
@@ -119,4 +150,6 @@ EOF
 
 USER root
 
-LABEL probox.post_create /usr/bin/setup-code-server.sh
+LABEL probox.post_create="/usr/bin/setup-code-server.sh"
+# -l for login shell
+LABEL probox.shell="/bin/fish -l"
