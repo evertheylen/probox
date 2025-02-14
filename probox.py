@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
 
-import argparse, sys, os, signal, json, subprocess, tempfile, socket, random, getpass
+import argparse, sys, os, signal, json, subprocess, tempfile, socket, random, getpass, tomllib
 from pathlib import Path
 from dataclasses import dataclass, asdict
-
-
-CONFIG_PATH = Path('/var/Bestanden/Configs/home')
-START = '\033[1;33m>>>'
-END = '\033[0m\n'
-GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository', 'code'}
-DEFAULT_IMAGE='arch-with-code-server'
-
 
 # TODO: handle errors automatically:
 #   Failed to create control group inotify object: Too many open files
@@ -18,13 +10,26 @@ DEFAULT_IMAGE='arch-with-code-server'
 # Solution -> `sudo sysctl fs.inotify.max_user_instances=8192`
 
 
-def capture_podman(*args, format_json=True):
-    res = subprocess.run(['podman', *args, *(['--format', 'json'] if format_json else [])], capture_output=True, text=True, check=True)
-    return json.loads(res.stdout)
+START = '\033[1;33m>>>'
+END = '\033[0m\n'
+GENERIC_NAMES = {'src', 'source', 'project', 'dir', 'folder', 'git', 'repo', 'repository', 'code'}
+
+default_config_file = """
+default_image = "docker.io/evertheylen/arch-with-code-server"
+# All contents of this directory will be pushed into the home directory of the container
+#home_overlay = "/home/foobar/configs/"
+"""
+
+config = None
 
 
 def status(*text):
     print(START, *text, end=END, file=sys.stderr)
+
+
+def capture_podman(*args, format_json=True):
+    res = subprocess.run(['podman', *args, *(['--format', 'json'] if format_json else [])], capture_output=True, text=True, check=True)
+    return json.loads(res.stdout)
 
 
 def run_podman(*args, check=True, quiet=False, **kwargs):
@@ -93,7 +98,7 @@ def stop_ssh_agent(name):
         status("No ssh-agent found")
 
 
-def create(*, path=None, name=None, from_image=None, privileged=False, push_config=True, ignore_post_create_cmd=False, ignore_existing_containers=False):
+def create(*, path=None, name=None, from_image=None, privileged=False, push_overlay=True, ignore_post_create_cmd=False, ignore_existing_containers=False):
     containers_by_path, containers_by_name = get_containers()
     proj_path = Path(os.getcwd() if path is None else path).absolute()
     if not ignore_existing_containers and proj_path in containers_by_path:
@@ -111,15 +116,21 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_conf
     basic_create_options = ['--name', name, '--hostname', name, '--tz=local']
 
     if from_image is None:
-        from_image = DEFAULT_IMAGE
+        from_image = config['default_image']
 
     image_data = capture_podman('image', 'inspect', from_image)[0]
     post_create_cmd = image_data["Config"]["Labels"].get("probox.post_create")
 
     if not ignore_post_create_cmd and post_create_cmd:
-        run_podman('create', *basic_create_options, from_image, quiet=True)
+        run_podman('create', *basic_create_options, '--env', f'PROJECT_PATH={proj_path}', from_image, quiet=True)
         try:
             run_podman('start', name, quiet=True)
+
+            if push_overlay:
+                # Push it here so configs could be modified by the post_create_cmd
+                push_overlay_to_container(name)
+                push_overlay = False
+
             run_podman('exec', '-it', name, post_create_cmd, check=True)
             # Why all this work? See https://github.com/containers/podman/issues/18309
             res = run_podman('commit', name, '--pause=true', capture_output=True)
@@ -157,9 +168,9 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_conf
         from_image
     )
 
-    if push_config:
+    if push_overlay:
         run_podman('start', name, quiet=True)
-        push_configs_to_container(name)
+        push_overlay_to_container(name)
 
 
 def find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name):
@@ -196,7 +207,7 @@ def run(*, path_or_name, cmd=None):
     else:
         workdir = Path('/home/evert')
 
-    if cmd is None:
+    if not cmd:
         cmd = container_data['Config']['Labels'].get('probox.shell', '/bin/bash').split(' ')
 
     env = {
@@ -214,12 +225,12 @@ def run(*, path_or_name, cmd=None):
         run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env-file', f.name, container_name, *cmd, check=False)
 
 
-def temp(path=None, from_image=None, privileged=False, push_config=True):
+def temp(path=None, from_image=None, privileged=False, push_overlay=True):
     random_id = ''.join(random.choice('0123456789ABCDEF') for i in range(6))
     name = f'probox-temp-{random_id}'
     create(
         path=path, name=name, from_image=from_image, privileged=privileged,
-        push_config=push_config, ignore_post_create_cmd=True, ignore_existing_containers=True
+        push_overlay=push_overlay, ignore_post_create_cmd=True, ignore_existing_containers=True
     )
     run(path_or_name=name)
     stop(path_or_name=name)
@@ -256,34 +267,41 @@ def ls():
     run_podman('ps', '--all', '--size', '--filter', 'label=probox.project_path', '--format', 'table {{.ID}} {{.Size}} {{.Status}} {{.Names}} {{.Mounts}}')
 
 
-def get_config_files():
-    return [file.relative_to(CONFIG_PATH) for file in CONFIG_PATH.rglob('*') if file.is_file()]
+def get_overlay_files():
+    if 'home_overlay' not in config:
+        return []
+    home_overlay = Path(config['home_overlay'])
+    return [file.relative_to(home_overlay) for file in home_overlay.rglob('*') if file.is_file()]
 
 
-def push_configs_to_container(name, files=None):
+def push_overlay_to_container(name, files=None):
     # TODO: container needs to be running ... also it's three commands per file???
-    for relfile in files or get_config_files():
+    for relfile in files or get_overlay_files():
         container_file = Path('/home/evert') / relfile
         subprocess.run(["podman", "exec", "--user", "evert", name, "mkdir", "-p", str(container_file.parent)], check=True)
-        subprocess.run(["podman", "cp", CONFIG_PATH / relfile, f"{name}:{container_file}"], check=True)
+        subprocess.run(["podman", "cp", Path(config['home_overlay']) / relfile, f"{name}:{container_file}"], check=True)
         subprocess.run(["podman", "exec", name, "chown", "evert:evert", str(container_file)], check=True)
 
 
-def pull_configs_from_container(name, files=None):
-    for relfile in files or get_config_files():
-        host_file = CONFIG_PATH / relfile
+def pull_overlay_from_container(name, files=None):
+    for relfile in files or get_overlay_files():
+        host_file = Path(config['home_overlay']) / relfile
         host_file.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["podman", "cp", f"{name}:{Path('/home/evert') / relfile}", str(host_file)], check=True)
 
 
-def config(path_or_name, operation, files=[]):
+def overlay(path_or_name, operation, files=[]):
+    if 'home_overlay' not in config:
+        status(f"No 'home_overlay' set in config, can't do anything")
+        sys.exit(1)
+
     containers_by_path, containers_by_name = get_containers()
     container_name = find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name)
     files = [Path(f) for f in files]
     if operation == 'push':
-        push_configs_to_container(container_name, files)
+        push_overlay_to_container(container_name, files)
     else:
-        pull_configs_from_container(container_name, files)
+        pull_overlay_from_container(container_name, files)
 
 
 ports_code = '''
@@ -320,6 +338,8 @@ def ports():
 
 
 def main():
+    global config
+
     parser = argparse.ArgumentParser(prog="probox", description="Manage containers for your development projects (with podman).")
 
     subparsers = parser.add_subparsers()
@@ -328,10 +348,10 @@ def main():
     create_parser.add_argument('path', nargs='?', default=None, help="Path to attach to container (default = working dir)")
     create_parser.add_argument('--name', help="Set the name for the container")
     create_parser.add_argument('--from', help="Container image to base this one upon")
-    create_parser.add_argument('--noconfig', action="store_true", help="Disable initial config push")
+    create_parser.add_argument('--no-overlay', action="store_true", help="Disable initial push of overlay files")
     create_parser.add_argument('--privileged', action="store_true", help="Make container privileged (not secure, but makes nested podman possible)")
     create_parser.set_defaults(func=lambda args: create(
-        path=args.path, name=args.name, from_image=getattr(args, 'from'), privileged=args.privileged, push_config=not args.noconfig
+        path=args.path, name=args.name, from_image=getattr(args, 'from'), privileged=args.privileged, push_overlay=not args.no_overlay
     ))
 
     run_parser = subparsers.add_parser('run', help="Run an existing container (start and exec)")
@@ -344,10 +364,10 @@ def main():
     temp_parser = subparsers.add_parser('temp', help="Create and run a temporary container")
     temp_parser.add_argument('path', nargs='?', default=None, help="Path to attach to container (default = working dir)")
     temp_parser.add_argument('--from', help="Container image to base this one upon")
-    temp_parser.add_argument('--noconfig', action="store_true", help="Disable initial config push")
+    temp_parser.add_argument('--no-overlay', action="store_true", help="Disable initial push of overlay files")
     temp_parser.add_argument('--privileged', action="store_true", help="Make container privileged (way less secure, but makes nested podman possible)")
     temp_parser.set_defaults(func=lambda args: temp(
-        path=args.path, from_image=getattr(args, 'from'), privileged=args.privileged, push_config=not args.noconfig
+        path=args.path, from_image=getattr(args, 'from'), privileged=args.privileged, push_overlay=not args.no_overlay
     ))
 
     stop_parser = subparsers.add_parser('stop', help="Stop a container")
@@ -366,11 +386,11 @@ def main():
     ls_parser = subparsers.add_parser('ls', help="List all probox containers")
     ls_parser.set_defaults(func=lambda args: ls())
 
-    config_parser = subparsers.add_parser('config', help="Manage configuration files")
-    config_parser.add_argument("operation", choices=["push", "pull"])
-    config_parser.add_argument('path_or_name', nargs='?', help="Path or name of container (default = working dir)")
-    config_parser.add_argument('file', nargs='*', help="File to push or pull")
-    config_parser.set_defaults(func=lambda args: config(
+    overlay_parser = subparsers.add_parser('overlay', help="Manage overlay files (useful for configs/dotfiles/...)")
+    overlay_parser.add_argument("operation", choices=["push", "pull"])
+    overlay_parser.add_argument('path_or_name', nargs='?', help="Path or name of container (default = working dir)")
+    overlay_parser.add_argument('file', nargs='*', help="File to push or pull")
+    overlay_parser.set_defaults(func=lambda args: overlay(
         path_or_name=args.path_or_name, operation=args.operation, files=args.file
     ))
 
@@ -381,6 +401,19 @@ def main():
     if not any(vars(args).values()):
         parser.print_help()
         return
+    else:
+        config_base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / 'probox'
+        config_base.mkdir(exist_ok=True, parents=True)
+
+        config_file = config_base / 'probox.toml'
+
+        if not config_file.exists():
+            with open(config_file, 'w') as f:
+                f.write(default_config_file)
+            status(f"Written default config to {config_file}")
+
+        with config_file.open("rb") as f:
+            config = tomllib.load(f)
     args.func(args)
 
 
