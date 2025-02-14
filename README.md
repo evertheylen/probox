@@ -15,6 +15,7 @@
 - The necessary ports and paths are forwarded in a transparent way, without compromising security
 - No dependencies (other than python, podman and ssh-agent)
 - Just a thin layer over `podman`
+- Podman-in-Podman is supported by default
 
 
 ## TODO's
