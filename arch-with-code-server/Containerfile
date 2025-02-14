@@ -50,11 +50,11 @@ RUN code-server --install-extension ms-python.python
 RUN code-server --install-extension llvm-vs-code-extensions.vscode-clangd
 RUN code-server --install-extension rust-lang.rust-analyzer
 RUN code-server --install-extension eamodio.gitlens
-RUN code-server --install-extension alefragnani.bookmarks
 RUN code-server --install-extension ms-toolsai.jupyter
 RUN code-server --install-extension golang.go
 RUN code-server --install-extension timonwong.shellcheck
 RUN code-server --install-extension github.github-vscode-theme
+#RUN code-server --install-extension alefragnani.bookmarks
 USER root
 
 
@@ -94,10 +94,6 @@ EOF
 
 
 # Also like quay.io/podman/stable (comments removed)
-# TODO add this?
-# default_sysctls = [
-#   "net.ipv4.ping_group_range=0 0",
-# ]
 RUN cat <<EOF >/etc/containers/containers.conf
 [containers]
 netns="host"

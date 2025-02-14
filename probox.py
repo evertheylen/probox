@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-import argparse, sys, os, signal, json, subprocess, tempfile, socket, random, getpass, tomllib
+import argparse, sys, os, signal, json, subprocess, tempfile, socket, random, getpass, grp, tomllib
 from pathlib import Path
-from dataclasses import dataclass, asdict
 
 # TODO: handle errors automatically:
 #   Failed to create control group inotify object: Too many open files
@@ -160,7 +159,7 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
         '--device=/dev/fuse',  # For rootless PINP, see https://www.redhat.com/en/blog/podman-inside-container
         *(['--privileged'] if privileged else []),
         '--volume', f'{proj_path}:{proj_path}',
-        '--volume', f'{ssh_agent_socket(name)}:/home/evert/ssh-agent.socket',
+        '--volume', f"{ssh_agent_socket(name)}:{Path.home() / 'ssh-agent.socket'}",
         # pasta: auto forward ports from container to host, but not other way around
         # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
         # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to run a webapp)
@@ -205,16 +204,16 @@ def run(*, path_or_name, cmd=None):
     if project_path == cwd or project_path in cwd.parents:
         workdir = cwd
     else:
-        workdir = Path('/home/evert')
+        workdir = Path.home()
 
     if not cmd:
         cmd = container_data['Config']['Labels'].get('probox.shell', '/bin/bash').split(' ')
 
     env = {
-        'SSH_AUTH_SOCK': '/home/evert/ssh-agent.socket',
+        'SSH_AUTH_SOCK': str(Path.home() / 'ssh-agent.socket'),
         # Assume linger in systemd
-        'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus',
-        'XDG_RUNTIME_DIR': '/run/user/1000',
+        'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus',
+        'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
         'PWD': workdir,
     }
 
@@ -222,7 +221,7 @@ def run(*, path_or_name, cmd=None):
         for k, v in env.items():
             f.write(f"{k}={v}\n")
         f.flush()
-        run_podman('exec', '-it', '--user', 'evert', '--workdir', str(workdir), '--env-file', f.name, container_name, *cmd, check=False)
+        run_podman('exec', '-it', '--user', getpass.getuser(), '--workdir', str(workdir), '--env-file', f.name, container_name, *cmd, check=False)
 
 
 def temp(path=None, from_image=None, privileged=False, push_overlay=True):
@@ -276,18 +275,21 @@ def get_overlay_files():
 
 def push_overlay_to_container(name, files=None):
     # TODO: container needs to be running ... also it's three commands per file???
+    user = getpass.getuser()
+    group = grp.getgrgid(os.getgid()).gr_name
+
     for relfile in files or get_overlay_files():
-        container_file = Path('/home/evert') / relfile
-        subprocess.run(["podman", "exec", "--user", "evert", name, "mkdir", "-p", str(container_file.parent)], check=True)
+        container_file = Path.home() / relfile
+        subprocess.run(["podman", "exec", "--user", user, name, "mkdir", "-p", str(container_file.parent)], check=True)
         subprocess.run(["podman", "cp", Path(config['home_overlay']) / relfile, f"{name}:{container_file}"], check=True)
-        subprocess.run(["podman", "exec", name, "chown", "evert:evert", str(container_file)], check=True)
+        subprocess.run(["podman", "exec", name, "chown", f"{user}:{group}", str(container_file)], check=True)
 
 
 def pull_overlay_from_container(name, files=None):
     for relfile in files or get_overlay_files():
         host_file = Path(config['home_overlay']) / relfile
         host_file.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["podman", "cp", f"{name}:{Path('/home/evert') / relfile}", str(host_file)], check=True)
+        subprocess.run(["podman", "cp", f"{name}:{Path.home() / relfile}", str(host_file)], check=True)
 
 
 def overlay(path_or_name, operation, files=[]):
