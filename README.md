@@ -3,7 +3,9 @@
 
 **Secure, isolated dev environments made easy**
 
-*⚠️ This project is still a work in progress. I am actually using it in my day-to-day programming, but it will require some work before others can use it too. That being said, it is relatively simple at ~400 lines of Python so feel free to modify and use it.*
+*⚠️ This project is still a work in progress. I am actually using it in my day-to-day programming, but it will require some work before others can use it too. In particular, you'll need to modify the image unless your Linux user is also named `evert` with UID 1000.*
+
+For some background information, see [the article I wrote about it](https://evertheylen.eu/p/probox-intro/).
 
 
 ## Features
@@ -18,9 +20,14 @@
 - Podman-in-Podman is supported by default
 
 
+## Installation
+
+Copy the `probox.py` file to some directory in your $PATH. That's it, there are no dependencies except Python 3.11 or newer.
+
+
 ## TODO's
 
-- [ ] Make it easy to use images with different UIDs/usernames
+- [ ] Make it easy to use images with different UIDs/usernames!
 - [ ] Read up on `--userns=keep-id` and `--security-opt label=disable`. Both are needed right now for easy operation but I don't fully understand the security implications.
 - [ ] Improve speed of overlay push/pull, and make it work when container is stopped
 
