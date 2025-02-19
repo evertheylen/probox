@@ -70,7 +70,7 @@ def suggest_name(path, _taken):
 
 
 def ssh_agent_socket(name):
-    return f'/run/user/1000/probox-{name}-ssh-agent.socket'
+    return f'/run/user/{os.getuid()}/{name}-ssh.sock'
 
 
 def ssh_agent_pid(name):
@@ -139,11 +139,7 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
             run_podman('stop', name, quiet=True)
             run_podman('rm', name, quiet=True)
 
-    # TODO get rid of --security-opt label=disable ???
-    # how does toolbx do it? the example given in docs specifically mentions "mounting entire home directory"
-    # https://docs.podman.io/en/latest/markdown/podman-run.1.html#volume-v-source-volume-host-dir-container-dir-options
-
-    # TODO look at https://github.com/containers/podman/discussions/13728#discussioncomment-2900471
+    # Maybe look at https://github.com/containers/podman/discussions/13728#discussioncomment-2900471 ?
     # In particular, this comment says something like using --userns=auto "with a huge /etc/subuid range"
     # Already did the subuid thing via
     #   sudo usermod --add-subuids 1000000-990000000 --add-subgids 1000000-990000000 evert
@@ -151,25 +147,35 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
 
     start_ssh_agent(name)
 
+    if not privileged and Path.home() != proj_path:
+        # see https://github.com/containers/podman/discussions/25335#discussioncomment-12237404
+        proj_dir_mount_opts = ['--volume', f'{proj_path}:{proj_path}:Z']
+    else:
+        # fallback to not kill a users home directory (docs require us to do it)
+        proj_dir_mount_opts = ['--volume', f'{proj_path}:{proj_path}']
+        if not privileged:
+            status("WARNING: home dir is selected as main directory, disabling SELinux!")
+            proj_dir_mount_opts.extend(['--security-opt', 'label=disable'])
+
     run_podman(
         'create', *basic_create_options, '--label', f'probox.project_path={proj_path}',
-        '--userns=keep-id', '--security-opt', 'label=disable',
+        '--userns=keep-id',
         '--pids-limit=-1',
-        '--cap-add=NET_RAW',  # For pings
+        '--cap-add=NET_RAW',  # For pings as non-root
         '--device=/dev/fuse',  # For rootless PINP, see https://www.redhat.com/en/blog/podman-inside-container
+        *proj_dir_mount_opts,
         *(['--privileged'] if privileged else []),
-        '--volume', f'{proj_path}:{proj_path}',
-        '--volume', f"{ssh_agent_socket(name)}:{Path.home() / 'ssh-agent.socket'}",
+        '--volume', f"{ssh_agent_socket(name)}:{Path.home() / 'ssh-agent.sock'}:Z",  # also with :Z flag
         # pasta: auto forward ports from container to host, but not other way around
         # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
-        # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to run a webapp)
+        # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to view a webapp)
         '--network=pasta:-t,auto,-u,auto,-T,none,-U,none',
         from_image
     )
 
     if push_overlay:
-        run_podman('start', name, quiet=True)
-        push_overlay_to_container(name)
+       run_podman('start', name, quiet=True)
+       push_overlay_to_container(name)
 
 
 def find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name):
@@ -210,7 +216,7 @@ def run(*, path_or_name, cmd=None):
         cmd = container_data['Config']['Labels'].get('probox.shell', '/bin/bash').split(' ')
 
     env = {
-        'SSH_AUTH_SOCK': str(Path.home() / 'ssh-agent.socket'),
+        'SSH_AUTH_SOCK': str(Path.home() / 'ssh-agent.sock'),
         # Assume linger in systemd
         'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus',
         'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
@@ -226,7 +232,7 @@ def run(*, path_or_name, cmd=None):
 
 def temp(path=None, from_image=None, privileged=False, push_overlay=True):
     random_id = ''.join(random.choice('0123456789ABCDEF') for i in range(6))
-    name = f'probox-temp-{random_id}'
+    name = f'pbt-{random_id}'
     create(
         path=path, name=name, from_image=from_image, privileged=privileged,
         push_overlay=push_overlay, ignore_post_create_cmd=True, ignore_existing_containers=True
