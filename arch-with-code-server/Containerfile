@@ -1,31 +1,25 @@
 FROM archlinux:base-devel
 
+# NAME = docker.io/evertheylen/arch-with-code-server
+
 # Parts taken from https://github.com/containers/image_build/blob/main/podman/Containerfile
-
-ARG UID=1000
-ENV UID=$UID
-ARG GID=1000
-ENV GID=$GID
-ARG USER=evert
-ENV USER=$USER
-
 
 # ------------------------ Install stuff ------------------------
 
 RUN pacman -Syu --noconfirm
 
-RUN groupadd -g $GID $USER && useradd -m -u $UID -g $GID -s /bin/fish $USER
-RUN echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+RUN useradd --create-home --system aurbuilder
+RUN echo "aurbuilder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 RUN systemd-machine-id-setup
 
 # Install paru from AUR (takes a relatively long time to compile)
 RUN pacman -S --noconfirm git
-RUN sudo -u $USER bash -c "git clone https://aur.archlinux.org/paru.git /tmp/paru && cd /tmp/paru && makepkg -si --noconfirm" \
+RUN sudo -u aurbuilder bash -c "git clone https://aur.archlinux.org/paru.git /tmp/paru && cd /tmp/paru && makepkg -si --noconfirm" \
     && rm -rf /tmp/paru
 
 # Install code-server (takes a bit of time to compile)
-RUN sudo -u $USER bash -c "paru -S --noconfirm code-server"
+RUN sudo -u aurbuilder bash -c "paru -S --noconfirm code-server"
 
 # System mgmt
 RUN pacman -S --noconfirm pkgfile
@@ -45,19 +39,6 @@ RUN pacman -Sc --noconfirm
 
 RUN npm install --global pnpm
 
-USER $USER
-RUN code-server --install-extension ms-python.python
-RUN code-server --install-extension llvm-vs-code-extensions.vscode-clangd
-RUN code-server --install-extension rust-lang.rust-analyzer
-RUN code-server --install-extension eamodio.gitlens
-RUN code-server --install-extension ms-toolsai.jupyter
-RUN code-server --install-extension golang.go
-RUN code-server --install-extension timonwong.shellcheck
-RUN code-server --install-extension github.github-vscode-theme
-#RUN code-server --install-extension alefragnani.bookmarks
-USER root
-
-
 RUN mkdir -p /var/lib/shared/overlay-images /var/lib/shared/overlay-layers /var/lib/shared/vfs-images /var/lib/shared/vfs-layers && \
   touch /var/lib/shared/overlay-images/images.lock && \
   touch /var/lib/shared/overlay-layers/layers.lock && \
@@ -71,8 +52,9 @@ RUN pkgfile --update
 
 RUN echo 'include /usr/share/nano/*.nanorc' >> /etc/nanorc
 
-RUN mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/$USER
+RUN mkdir -p /var/lib/systemd/linger
 
+USER root
 CMD [ "/sbin/init" ]
 
 # Like quay.io/podman/stable (comments removed)
@@ -112,40 +94,15 @@ runtime="crun"
 EOF
 
 # Also for rootless PINP
-RUN echo $USER:10000:5000 > /etc/subuid
-RUN echo $USER:10000:5000 > /etc/subgid
 RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newuidmap
 RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newgidmap
 
 # Make pings work
 RUN setcap cap_net_raw+p $(which ping)
 
-COPY ./setup-code-server.sh /usr/bin/setup-code-server.sh
-RUN chmod +x /usr/bin/setup-code-server.sh
+COPY ./setup-user.sh /usr/bin/setup-user.sh
+COPY ./start-shell.sh /usr/bin/start-shell.sh
+RUN chmod +x /usr/bin/start-shell.sh /usr/bin/setup-user.sh
 
-USER $USER
-
-# Again, for rootless PINP
-RUN mkdir -p ~/.config/containers
-RUN cat <<EOF >~/.config/containers/containers.conf
-[containers]
-volumes = [
-	"/proc:/proc",
-]
-default_sysctls = []
-EOF
-
-RUN mkdir -p ~/.config/fish/
-RUN cat <<EOF > ~/.config/fish/config.fish
-set -x XDG_RUNTIME_DIR /run/user/$UID
-set -x DBUS_SESSION_BUS_ADDRESS unix:path=/run/user/$UID/bus
-set -x SSH_AUTH_SOCK /home/$USER/ssh-agent.socket
-set -x GIT_EDITOR nano
-set -x EDITOR nano
-EOF
-
-USER root
-
-LABEL probox.post_create="/usr/bin/setup-code-server.sh"
-# -l for login shell
-LABEL probox.shell="/bin/fish -l"
+LABEL probox.setup_user="/usr/bin/setup-user.sh"
+LABEL probox.start_shell="/usr/bin/start-shell.sh"

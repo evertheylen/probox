@@ -3,10 +3,16 @@
 import argparse, sys, os, signal, json, subprocess, tempfile, socket, random, getpass, grp, tomllib
 from pathlib import Path
 
-# TODO: handle errors automatically:
+# TODO: automatic error handling?
+
+# Problem:
 #   Failed to create control group inotify object: Too many open files
 #   Failed to allocate manager object: Too many open files
-# Solution -> `sudo sysctl fs.inotify.max_user_instances=8192`
+# Solution: sudo sysctl fs.inotify.max_user_instances=8192
+
+# Problem (during building):
+#   error while loading shared libraries: libc.so.6: cannot change memory protections
+# Solution: restorecon -RFv $HOME/.local/share/containers
 
 
 START = '\033[1;33m>>>'
@@ -18,6 +24,7 @@ default_image = "docker.io/evertheylen/arch-with-code-server"
 # All contents of this directory will be pushed into the home directory of the container
 #home_overlay = "/home/foobar/configs/"
 """
+
 
 config = None
 
@@ -97,6 +104,62 @@ def stop_ssh_agent(name):
         status("No ssh-agent found")
 
 
+def parse_user_triple(triple_str):
+    username, uid_s, gid_s = triple_str.split(':')
+    return (username, int(uid_s), int(gid_s))
+
+
+def stringify_user_triple(username, uid, gid):
+    return f"{username}:{uid}:{gid}"
+
+
+def image_with_user(from_image, username, uid, gid):
+    # Builds an image from a certain base image
+    base_images = capture_podman('image', 'ls', '--all', from_image)
+    if len(base_images) == 0:
+        status(f"No base image found for {from_image}, pulling...")
+        run_podman('pull', from_image, check=True)
+        base_images = capture_podman('image', 'ls', '--all', from_image)
+
+    if len(base_images) != 1:
+        status(f"Found {len(base_images)} matching '{from_image}', expecting exactly 1")
+        sys.exit(1)
+
+    parent_image = base_images[0]["Id"]
+    images = capture_podman('image', 'ls', '--all', '--filter', f'label=probox.parent_image={parent_image}')
+    images_by_user_triple = {parse_user_triple(i['Labels']['probox.user_triple']): i for i in images}
+
+    existing_image = images_by_user_triple.get((username, uid, gid))
+
+    if existing_image is None:
+        image_data = capture_podman('image', 'inspect', parent_image)[0]
+        setup_user_cmd = image_data["Config"]["Labels"].get("probox.setup_user")
+
+        if setup_user_cmd is None:
+            status("No probox.setup_user script specified!")
+            sys.exit(1)
+
+        container_id = run_podman(
+            'create', '--tz=local', '--rm',
+            '--label', f'probox.parent_image={parent_image}',
+            '--label', f'probox.user_triple={stringify_user_triple(username, uid, gid)}',
+            parent_image, capture_output=True
+        ).stdout.strip()
+
+        try:
+            run_podman('start', container_id, quiet=True)
+            run_podman('exec', '--env', f'USER={username}', '--env', f'UID={uid}', '--env', f'GID={gid}', container_id, setup_user_cmd, check=True)
+            image_id = run_podman('commit', container_id, '--pause=true', capture_output=True).stdout.strip()
+            status(f"Made new image for {username} (UID={uid}, GID={gid}) based on {from_image} -> {image_id}")
+            return image_id
+        finally:
+            run_podman('stop', container_id, quiet=True)
+    else:
+        image_id = existing_image["Id"]
+        status(f"Found existing image for {username} (UID={uid}, GID={gid}) based on {from_image} -> {image_id}")
+        return image_id
+
+
 def create(*, path=None, name=None, from_image=None, privileged=False, push_overlay=True, ignore_post_create_cmd=False, ignore_existing_containers=False):
     containers_by_path, containers_by_name = get_containers()
     proj_path = Path(os.getcwd() if path is None else path).absolute()
@@ -117,27 +180,7 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
     if from_image is None:
         from_image = config['default_image']
 
-    image_data = capture_podman('image', 'inspect', from_image)[0]
-    post_create_cmd = image_data["Config"]["Labels"].get("probox.post_create")
-
-    if not ignore_post_create_cmd and post_create_cmd:
-        run_podman('create', *basic_create_options, '--env', f'PROJECT_PATH={proj_path}', from_image, quiet=True)
-        try:
-            run_podman('start', name, quiet=True)
-
-            if push_overlay:
-                # Push it here so configs could be modified by the post_create_cmd
-                push_overlay_to_container(name)
-                push_overlay = False
-
-            run_podman('exec', '-it', name, post_create_cmd, check=True)
-            # Why all this work? See https://github.com/containers/podman/issues/18309
-            res = run_podman('commit', name, '--pause=true', capture_output=True)
-            # Next command will recreate it
-            from_image = res.stdout.strip()
-        finally:
-            run_podman('stop', name, quiet=True)
-            run_podman('rm', name, quiet=True)
+    image_id = image_with_user(from_image, getpass.getuser(), os.getuid(), os.getgid())
 
     # Maybe look at https://github.com/containers/podman/discussions/13728#discussioncomment-2900471 ?
     # In particular, this comment says something like using --userns=auto "with a huge /etc/subuid range"
@@ -170,7 +213,7 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
         # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
         # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to view a webapp)
         '--network=pasta:-t,auto,-u,auto,-T,none,-U,none',
-        from_image
+        image_id
     )
 
     if push_overlay:
@@ -213,7 +256,7 @@ def run(*, path_or_name, cmd=None):
         workdir = Path.home()
 
     if not cmd:
-        cmd = container_data['Config']['Labels'].get('probox.shell', '/bin/bash').split(' ')
+        cmd = container_data['Config']['Labels'].get('probox.start_shell', '/bin/bash').split(' ')
 
     env = {
         'SSH_AUTH_SOCK': str(Path.home() / 'ssh-agent.sock'),
@@ -221,6 +264,7 @@ def run(*, path_or_name, cmd=None):
         'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus',
         'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
         'PWD': workdir,
+        'PROJECT_PATH': project_path
     }
 
     with tempfile.NamedTemporaryFile(mode='w+') as f:
@@ -235,11 +279,13 @@ def temp(path=None, from_image=None, privileged=False, push_overlay=True):
     name = f'pbt-{random_id}'
     create(
         path=path, name=name, from_image=from_image, privileged=privileged,
-        push_overlay=push_overlay, ignore_post_create_cmd=True, ignore_existing_containers=True
+        push_overlay=push_overlay, ignore_existing_containers=True
     )
-    run(path_or_name=name)
-    stop(path_or_name=name)
-    run_podman('rm', name, quiet=True)
+    try:
+        run(path_or_name=name)
+    finally:
+        stop(path_or_name=name)
+        run_podman('rm', name, quiet=True)
 
 
 def stop(path_or_name):
