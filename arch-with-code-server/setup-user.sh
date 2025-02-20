@@ -35,9 +35,6 @@ EOF
 mkdir -p ~/.config/fish/
 
 cat <<EOF > ~/.config/fish/config.fish
-set -x XDG_RUNTIME_DIR /run/user/$UID
-set -x DBUS_SESSION_BUS_ADDRESS unix:path=/run/user/$UID/bus
-set -x SSH_AUTH_SOCK /home/$USER/ssh-agent.socket
 set -x GIT_EDITOR nano
 set -x EDITOR nano
 EOF

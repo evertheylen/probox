@@ -9,3 +9,4 @@ Automated tests would be nice but that would require a very complex test environ
 - In the container, you have to be able to:
   - `ping 1.1.1.1`
   - `podman run --rm -it alpine`
+- Does `probox ports` run correctly?

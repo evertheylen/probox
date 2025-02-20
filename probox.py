@@ -14,6 +14,8 @@ from pathlib import Path
 #   error while loading shared libraries: libc.so.6: cannot change memory protections
 # Solution: restorecon -RFv $HOME/.local/share/containers
 
+# PINP proc/pts/urandom/... device issues
+# sudo setsebool -P container_use_devices=true -> nope
 
 START = '\033[1;33m>>>'
 END = '\033[0m\n'
@@ -190,7 +192,8 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
 
     start_ssh_agent(name)
 
-    if not privileged and Path.home() != proj_path:
+    # TODO PINP does not work with SELinux yet...
+    if False and not privileged and Path.home() != proj_path:
         # see https://github.com/containers/podman/discussions/25335#discussioncomment-12237404
         proj_dir_mount_opts = ['--volume', f'{proj_path}:{proj_path}:Z']
     else:
@@ -217,8 +220,8 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
     )
 
     if push_overlay:
-       run_podman('start', name, quiet=True)
-       push_overlay_to_container(name)
+        run_podman('start', name, quiet=True)
+        push_overlay_to_container(name)
 
 
 def find_container_name_by_path_or_name(containers_by_path, containers_by_name, path_or_name):
@@ -263,7 +266,6 @@ def run(*, path_or_name, cmd=None):
         # Assume linger in systemd
         'DBUS_SESSION_BUS_ADDRESS': f'unix:path=/run/user/{os.getuid()}/bus',
         'XDG_RUNTIME_DIR': f'/run/user/{os.getuid()}',
-        'PWD': workdir,
         'PROJECT_PATH': project_path
     }
 
