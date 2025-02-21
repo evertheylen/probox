@@ -192,10 +192,14 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
 
     start_ssh_agent(name)
 
-    # TODO PINP does not work with SELinux yet...
-    if False and not privileged and Path.home() != proj_path:
+    if not privileged and Path.home() != proj_path:
         # see https://github.com/containers/podman/discussions/25335#discussioncomment-12237404
-        proj_dir_mount_opts = ['--volume', f'{proj_path}:{proj_path}:Z']
+        # TODO: allow PINP while keeping SELinux active!
+        # Current trade-off solution: label as container?
+        proj_dir_mount_opts = [
+            '--volume', f'{proj_path}:{proj_path}:Z',
+            '--security-opt', 'label=type:container_runtime_t',
+        ]
     else:
         # fallback to not kill a users home directory (docs require us to do it)
         proj_dir_mount_opts = ['--volume', f'{proj_path}:{proj_path}']
@@ -209,6 +213,7 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
         '--pids-limit=-1',
         '--cap-add=NET_RAW',  # For pings as non-root
         '--device=/dev/fuse',  # For rootless PINP, see https://www.redhat.com/en/blog/podman-inside-container
+        '--device=/dev/net/tun',  # To enable using `pasta`
         *proj_dir_mount_opts,
         *(['--privileged'] if privileged else []),
         '--volume', f"{ssh_agent_socket(name)}:{Path.home() / 'ssh-agent.sock'}:Z",  # also with :Z flag
