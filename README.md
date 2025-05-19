@@ -30,6 +30,7 @@ Copy the `probox.py` file to some directory in your $PATH. That's it, there are 
 - [x] Make it easy to use images with different UIDs/usernames!
 - [ ] Read up on podman options regarding security -> [discussion ongoing](https://github.com/containers/podman/discussions/25335)
 - [ ] Improve speed of overlay push/pull, and make it work when container is stopped
+- [ ] Automatic testing of security through a project like https://github.com/brompwnie/botb
 
 Nice to haves:
 - [ ] Make config handling use a git repo, with branches per project?

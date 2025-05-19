@@ -28,11 +28,13 @@ RUN pacman -S --noconfirm podman fuse-overlayfs
 # Terminal stuff
 RUN pacman -S --noconfirm less nano fish ripgrep tree htop bat fzf tmux tree jq
 # Programming
-RUN pacman -S --noconfirm python python-pexpect python-pillow python-poetry jedi-language-server python-jedi nodejs npm go jupyterlab clang rust-analyzer gopls shellcheck
+RUN pacman -S --noconfirm python python-pexpect python-pillow python-poetry python-distutils-extra jedi-language-server python-jedi nodejs npm go jupyterlab clang rust-analyzer gopls shellcheck
 # Debugging
 RUN pacman -S --noconfirm strace valgrind gdb
 # Network
-RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump socat net-tools rsync
+RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump socat net-tools rsync rclone
+# Various
+RUN pacman -S --noconfirm zip unzip
 
 # Clean up
 RUN pacman -Sc --noconfirm

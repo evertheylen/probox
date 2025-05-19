@@ -8,7 +8,8 @@ from pathlib import Path
 # Problem:
 #   Failed to create control group inotify object: Too many open files
 #   Failed to allocate manager object: Too many open files
-# Solution: sudo sysctl fs.inotify.max_user_instances=8192
+#   systemd in degraded state?
+# Solution: sudo sysctl fs.inotify.max_user_instances=50000
 
 # Problem (during building):
 #   error while loading shared libraries: libc.so.6: cannot change memory protections
@@ -16,6 +17,23 @@ from pathlib import Path
 
 # PINP proc/pts/urandom/... device issues
 # sudo setsebool -P container_use_devices=true -> nope
+
+# Problem while starting various systemd services (e.g. postgres):
+#   postgresql.service: Failed to keep CAP_SYS_ADMIN: Operation not permitted
+#   postgresql.service: Failed at step USER spawning /usr/bin/postgresql-check-db-dir: Operation not permitted
+#
+# Solution: it's not postgres that is requesting CAP_SYS_ADMIN, but systemd itself as instructed by
+# the unit file. Comment these lines:
+#   ProtectKernelModules=true
+#   ProtectKernelTunables=true
+#   PrivateDevices=true
+#   RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+#   RestrictNamespaces=true
+#   RestrictRealtime=true
+#   SystemCallArchitectures=native
+# This issue goes into more detail: https://github.com/systemd/systemd/issues/34565
+# A fix (where systemd just these when it can't get CAP_SYS_ADMIN) is planned for
+# systemd v258, currently Arch ships v257.
 
 START = '\033[1;33m>>>'
 END = '\033[0m\n'
