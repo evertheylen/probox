@@ -32,8 +32,11 @@ from pathlib import Path
 #   RestrictRealtime=true
 #   SystemCallArchitectures=native
 # This issue goes into more detail: https://github.com/systemd/systemd/issues/34565
-# A fix (where systemd just these when it can't get CAP_SYS_ADMIN) is planned for
-# systemd v258, currently Arch ships v257.
+# A fix (where systemd just ignores these when it can't get CAP_SYS_ADMIN) is planned for
+# systemd v259, currently Arch ships v257.
+
+# Problem: "Transport endpoint is not connected" or inresponsive systemctl or code-server is not reachable or ...
+# Solution: None. Don't upgrade systemd > 257. See arch-with-code-server/Containerfile
 
 START = '\033[1;33m>>>'
 END = '\033[0m\n'
