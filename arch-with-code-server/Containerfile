@@ -1,6 +1,4 @@
-#FROM archlinux:base-devel
-# pinned as it has systemd 257, see below
-FROM archlinux:base-devel-20250914.0.420821
+FROM archlinux:base-devel
 
 # NAME = docker.io/evertheylen/arch-with-code-server
 
@@ -10,34 +8,6 @@ FROM archlinux:base-devel-20250914.0.420821
 # Deploy: 
 
 # ------------------------ Install stuff ------------------------
-
-# systemd 258-3 gives me problems, whereas systemd 257.9-1 does not
-# code-server wont work, `systemctl status` will fail or be very slow.
-# The error "Transport endpoint is not connected" may be shown in many places.
-# If you look into journalctl, you'll see the actual error is this:
-# dbus-broker-launch[83]: ERROR util_audit_drop_permissions @ ../dbus-broker-37/src/util/audit.c +81: Operation not permitted
-# Unsure why, the code at audit.c:81 hasn't been changed in a while
-# Note that dbus packages did not upgrade!
-# No idea why this happens. For now I'm just going to freeze systemd-*
-# --> it is because of https://github.com/systemd/systemd/commit/38748596f0783f2b773bd95d4af4d83f5b5ff872
-#     issue at https://github.com/systemd/systemd/issues/39563
-#     now fixed!
-
-# Full error log (this loops):
-# Sep 23 22:38:55 e0c320035454 systemd[1]: Starting D-Bus System Message Bus...
-# Sep 23 22:38:55 e0c320035454 systemd[1]: Started D-Bus System Message Bus.
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[83]: ERROR util_audit_drop_permissions @ ../dbus-broker-37/src/util/audit.c +81: Operation not permitted
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[81]: ERROR service_add @ ../dbus-broker-37/src/launch/service.c +1011: Transport endpoint is not connected
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[81]:       launcher_add_services @ ../dbus-broker-37/src/launch/launcher.c +823
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[81]:       launcher_run @ ../dbus-broker-37/src/launch/launcher.c +1439
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[81]:       run @ ../dbus-broker-37/src/launch/main.c +152
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[81]:       main @ ../dbus-broker-37/src/launch/main.c +178
-# Sep 23 22:38:55 e0c320035454 dbus-broker-launch[81]: Exiting due to fatal error: -107
-# Sep 23 22:40:25 e0c320035454 systemd[1]: Failed to query API bus instance ID, not deserializing subscriptions: Transport endpoint is not connected
-# Sep 23 22:40:25 e0c320035454 systemd[1]: dbus-broker.service: Main process exited, code=exited, status=1/FAILURE
-# Sep 23 22:40:25 e0c320035454 systemd[1]: dbus-broker.service: Failed with result 'exit-code'.
-
-RUN sed -i -E 's/^#?IgnorePkg\s*=\s*(.*)$/IgnorePkg = \1 systemd systemd-libs systemd-sysvcompat/' /etc/pacman.conf
 
 RUN pacman -Syu --noconfirm
 
