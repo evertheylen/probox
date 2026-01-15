@@ -20,6 +20,7 @@ code-server --install-extension ms-toolsai.jupyter
 code-server --install-extension golang.go
 code-server --install-extension timonwong.shellcheck
 code-server --install-extension github.github-vscode-theme
+code-server --install-extension saoudrizwan.claude-dev  # = cline
 #code-server --install-extension alefragnani.bookmarks
 
 # Again, for rootless PINP
@@ -37,6 +38,7 @@ mkdir -p ~/.config/fish/
 cat <<EOF > ~/.config/fish/config.fish
 set -x GIT_EDITOR nano
 set -x EDITOR nano
+set -x NODE_OPTIONS '--enable-source-maps'
 EOF
 
 ENDSCRIPT

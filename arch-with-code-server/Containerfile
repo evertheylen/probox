@@ -5,11 +5,14 @@ FROM archlinux:base-devel
 # Parts taken from https://github.com/containers/image_build/blob/main/podman/Containerfile
 
 # Fresh build: podman build --no-cache -t docker.io/evertheylen/arch-with-code-server .
-# Deploy: 
+# Login to docker registry: podman login docker.io
+# Deploy: podman push docker.io/evertheylen/arch-with-code-server
 
 # ------------------------ Install stuff ------------------------
 
-RUN pacman -Syu --noconfirm
+RUN pacman-key --init
+RUN pacman -Sy --noconfirm archlinux-keyring
+RUN pacman -Su --noconfirm
 
 RUN useradd --create-home --system aurbuilder
 RUN echo "aurbuilder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
@@ -39,7 +42,7 @@ RUN pacman -S --noconfirm strace valgrind gdb
 # Network
 RUN pacman -S --noconfirm openssh openvpn traceroute nmap wget tcpdump socat net-tools rsync rclone bind
 # Various
-RUN pacman -S --noconfirm zip unzip ffmpeg
+RUN pacman -S --noconfirm zip unzip ffmpeg imagemagick man-db doctl
 
 # Clean up
 RUN pacman -Sc --noconfirm
@@ -115,12 +118,10 @@ runtime="crun"
 
 EOF
 
-# Also for rootless PINP
-RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newuidmap
-RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newgidmap
-
-# Make pings work
-RUN setcap cap_net_raw+p $(which ping)
+# Also for rootless PINP, make pings work
+RUN setcap cap_setuid,cap_setgid=eip /usr/sbin/newuidmap &&\
+  setcap cap_setuid,cap_setgid=eip /usr/sbin/newgidmap &&\
+  setcap cap_net_raw+p $(which ping)
 
 COPY ./setup-user.sh /usr/bin/setup-user.sh
 COPY ./start-shell.sh /usr/bin/start-shell.sh
