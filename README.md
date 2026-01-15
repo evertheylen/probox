@@ -3,7 +3,7 @@
 
 **Secure, isolated dev environments made easy**
 
-*⚠️ This project is still a work in progress. I am actually using it in my day-to-day programming, but it will require some work before others can easily use it too.*
+*📢 I currently use this project in my day-to-day programming. If your host is similar to mine (Atomic Fedora) and you don't mind the default container image (Arch Linux with code-server) it should work. Other host/container choices may require some work.*
 
 For some background information, see [the article I wrote about it](https://evertheylen.eu/p/probox-intro/).
 
@@ -27,12 +27,20 @@ Copy the `probox.py` file to some directory in your $PATH. That's it, there are 
 
 ## TODO's
 
+Big ones:
+- [ ] Automatic testing of security through a project like https://github.com/brompwnie/botb
+- [ ] Solution for the plethora of developer tools that store symmetric keys/passwords (e.g. `flyctl` or `doctl`)
+  Preferably I don't have to MITM every request. I wrote a PoC for `doctl` in `digitalocean_auth.py` that works via OAuth (symmetric password would be stored on the host)
+- [ ] Automatic snapshots (on filesystems that support it)
+- [ ] Upgrade container without losing settings (`pacman -Syu` in 5 containers will cause them to diverge and no longer share the base image)
+
+Technical:
 - [x] Make it easy to use images with different UIDs/usernames!
 - [ ] Read up on podman options regarding security -> [discussion ongoing](https://github.com/containers/podman/discussions/25335)
 - [ ] Improve speed of overlay push/pull, and make it work when container is stopped
-- [ ] Automatic testing of security through a project like https://github.com/brompwnie/botb
 
 Nice to haves:
+- [x] Speed up Podman-in-Podman
 - [ ] Make config handling use a git repo, with branches per project?
 - [ ] Inspect a created container and suggest changes to the original Dockerfile for easier reproducibility (e.g. check installed packages and add to `pacman -S` command in Dockerfile)
 - [ ] Easy inter-container networking?

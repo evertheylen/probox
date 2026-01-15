@@ -82,25 +82,11 @@ RUN mkdir -p /var/lib/systemd/linger
 USER root
 CMD [ "/sbin/init" ]
 
+# LESSON LEARNED: do not set /etc/containers/storage.conf
+# let podman decide what is best, and performance becomes near-native
+# However, do provide mounts into the host filesystem for graphRoot! (user and system)
+
 # Like quay.io/podman/stable (comments removed)
-RUN cat <<EOF > /etc/containers/storage.conf
-[storage]
-driver = "overlay"
-runroot = "/run/containers/storage"
-graphroot = "/var/lib/containers/storage"
-
-[storage.options]
-additionalimagestores = ["/var/lib/shared", "/usr/lib/containers/storage"]
-pull_options = {enable_partial_images = "true", use_hard_links = "false", ostree_repos=""}
-
-[storage.options.overlay]
-mount_program = "/usr/bin/fuse-overlayfs"
-mountopt = "nodev,fsync=0"
-
-EOF
-
-
-# Also like quay.io/podman/stable (comments removed)
 RUN cat <<EOF >/etc/containers/containers.conf
 [containers]
 netns="host"

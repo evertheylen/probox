@@ -136,6 +136,12 @@ def stringify_user_triple(username, uid, gid):
     return f"{username}:{uid}:{gid}"
 
 
+def make_pinp_container_storage(container_id):
+    path = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local/share")) / 'probox' / container_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def image_with_user(from_image, username, uid, gid):
     # Builds an image from a certain base image
     base_images = capture_podman('image', 'ls', '--all', from_image)
@@ -228,6 +234,8 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
             status("WARNING: home dir is selected as main directory, disabling SELinux!")
             proj_dir_mount_opts.extend(['--security-opt', 'label=disable'])
 
+    pinp_storage_id = name + '-' + ''.join(random.choice('0123456789ABCDEF') for i in range(6))
+
     run_podman(
         'create', *basic_create_options, '--label', f'probox.project_path={proj_path}',
         '--userns=keep-id',
@@ -238,6 +246,10 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
         *proj_dir_mount_opts,
         *(['--privileged'] if privileged else []),
         '--volume', f"{ssh_agent_socket(name)}:{Path.home() / 'ssh-agent.sock'}:Z",  # also with :Z flag
+        # for faster builds in PINP: allow FUSE overlayfs?
+        '--volume', f"{make_pinp_container_storage(pinp_storage_id)}:/var/lib/containers/storage:Z",
+        '--volume', f"{make_pinp_container_storage(pinp_storage_id + '-' + getpass.getuser())}:{Path.home() / '.local/share/containers/storage'}:Z",
+
         # pasta: auto forward ports from container to host, but not other way around
         # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
         # I use a firewall to fix this, so I can also temporarily allow it (e.g. to allow my phone on WiFi to view a webapp)
