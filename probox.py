@@ -247,8 +247,9 @@ def create(*, path=None, name=None, from_image=None, privileged=False, push_over
         *(['--privileged'] if privileged else []),
         '--volume', f"{ssh_agent_socket(name)}:{Path.home() / 'ssh-agent.sock'}:Z",  # also with :Z flag
         # for faster builds in PINP: allow FUSE overlayfs?
-        '--volume', f"{make_pinp_container_storage(pinp_storage_id)}:/var/lib/containers/storage:Z",
-        '--volume', f"{make_pinp_container_storage(pinp_storage_id + '-' + getpass.getuser())}:{Path.home() / '.local/share/containers/storage'}:Z",
+        # TODO: should put containers cache in ~/.cache ?
+        '--volume', f"{make_pinp_container_storage(pinp_storage_id)}:/var/lib/containers:Z",
+        '--volume', f"{make_pinp_container_storage(pinp_storage_id + '-' + getpass.getuser())}:{Path.home() / '.local/share/containers'}:Z",
 
         # pasta: auto forward ports from container to host, but not other way around
         # WARNING: binding on 0.0.0.0 in a container will ALSO expose it on 0.0.0.0 on the host!
