@@ -20,7 +20,6 @@ code-server --install-extension ms-toolsai.jupyter
 code-server --install-extension golang.go
 code-server --install-extension timonwong.shellcheck
 code-server --install-extension github.github-vscode-theme
-code-server --install-extension saoudrizwan.claude-dev  # = cline
 #code-server --install-extension alefragnani.bookmarks
 
 # Again, for rootless PINP
